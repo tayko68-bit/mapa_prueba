@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Prueba de Mapa de Ruta GPS</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { height: 100vh; width: 100%; }
+        .controles {
+            position: absolute;
+            top: 10px;
+            left: 50px;
+            z-index: 1000; /* Asegura que esté sobre el mapa */
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            font-family: Arial, sans-serif;
+        }
+        .controles input, .controles button {
+            margin: 5px;
+            padding: 8px;
+            border-radius: 3px;
+            border: 1px solid #ccc;
+        }
+        .controles button {
+            background-color: #4CAF50;
+            color: white;
+            cursor: pointer;
+        }
+        .controles button:hover {
+            background-color: #45a049;
+        }
+        #mensaje {
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+
+<div class="controles">
+    <label for="usuario">Usuario:</label>
+    <input type="text" id="usuario" value="D. PANCHO MARTÍNEZ"> <!-- CAMBIA VALOR PREDETERMINADO SI ES NECESARIO -->
+    <br>
+    <!-- Opcional: Filtros de Fecha -->
+    <label for="fecha_desde">Fecha Desde (YYYY-MM-DD):</label>
+    <input type="text" id="fecha_desde" placeholder="Opcional">
+    <br>
+    <label for="fecha_hasta">Fecha Hasta (YYYY-MM-DD):</label>
+    <input type="text" id="fecha_hasta" placeholder="Opcional">
+    <br>
+    <button onclick="cargarRuta()">Cargar Ruta</button>
+    <p id="mensaje"></p>
+</div>
+
+<div id="map"></div>
+
+<script>
+    // ---------------------------------------------------------------------
+    // CONFIGURACIÓN - ¡¡¡MODIFICA ESTA LÍNEA!!!
+    // ---------------------------------------------------------------------
+    const SCRIPT_URL = "TU_URL_DE_SCRIPT_DESPLEGADO_AQUI/exec"; 
+    // Ejemplo: "https://script.google.com/macros/s/AKfycbyobR6o9sZrSiEpKSf7JERFJ9HSnT3Vn7o1wOCDMBlrx547g2-BINGJcHtILoKi9URE/exec";
+    // ---------------------------------------------------------------------
+
+    // Coordenadas iniciales del mapa y nivel de zoom (ajústalas a tu área de interés)
+    var map = L.map('map').setView([24.785, -107.403], 13); 
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+
+    var rutaPolyline = null; // Para guardar la referencia a la polilínea y poder borrarla/actualizarla
+    var marcadorInicio = null;
+    var marcadorFin = null;
+
+    async function cargarRuta() {
+        const mensajeEl = document.getElementById('mensaje');
+        mensajeEl.textContent = "Cargando ruta...";
+        
+        const usuario = document.getElementById('usuario').value.trim();
+        const fechaDesde = document.getElementById('fecha_desde').value.trim();
+        const fechaHasta = document.getElementById('fecha_hasta').value.trim();
+
+        if (!usuario) {
+            mensajeEl.textContent = "Por favor, ingresa un nombre de usuario.";
+            return;
+        }
+
+        if (!SCRIPT_URL || SCRIPT_URL === "https://script.google.com/macros/s/AKfycbyobR6o9sZrSiEpKSf7JERFJ9HSnT3Vn7o1wOCDMBlrx547g2-BINGJcHtILoKi9URE/exec") {
+            mensajeEl.textContent = "Error: Debes configurar la SCRIPT_URL en la parte superior del script de esta página HTML.";
+            console.error("Error: SCRIPT_URL no configurada.");
+            return;
+        }
+        
+        // Limpiar elementos anteriores del mapa
+        if (rutaPolyline) {
+            map.removeLayer(rutaPolyline);
+            rutaPolyline = null;
+        }
+        if (marcadorInicio) {
+            map.removeLayer(marcadorInicio);
+            marcadorInicio = null;
+        }
+        if (marcadorFin) {
+            map.removeLayer(marcadorFin);
+            marcadorFin = null;
+        }
+
+        // Construir la URL para el GET al script
+        let url = `${SCRIPT_URL}?accion=obtener_ruta_leaflet&usuario=${encodeURIComponent(usuario)}`;
+        if (fechaDesde) {
+            url += `&fecha_desde=${encodeURIComponent(fechaDesde)}`;
+        }
+        if (fechaHasta) {
+            url += `&fecha_hasta=${encodeURIComponent(fechaHasta)}`;
+        }
+        
+        try {
+            console.log("Solicitando URL:", url);
+            const respuestaHttp = await fetch(url);
+            
+            if (!respuestaHttp.ok) {
+                // Intenta obtener más detalles del error si es posible
+                let errorDetalle = "";
+                try {
+                    const errorJson = await respuestaHttp.json(); // Si el script devuelve JSON en error
+                    errorDetalle = errorJson.message || JSON.stringify(errorJson);
+                } catch (e) {
+                    errorDetalle = await respuestaHttp.text(); // Si no es JSON
+                }
+                throw new Error(`Error de red o del script: ${respuestaHttp.status} - ${errorDetalle}`);
+            }
+
+            const respuestaJson = await respuestaHttp.json();
+            console.log("Respuesta del script:", respuestaJson);
+
+            if (respuestaJson.status === "success" && respuestaJson.data) {
+                const puntosRuta = respuestaJson.data; // Esto debería ser un array de [lat, lng]
+                
+                if (puntosRuta.length > 0) {
+                    // Validar que los puntos sean arrays de 2 números
+                    const puntosValidos = puntosRuta.filter(p => Array.isArray(p) && p.length === 2 && typeof p[0] === 'number' && typeof p[1] === 'number');
+
+                    if (puntosValidos.length > 0) {
+                        rutaPolyline = L.polyline(puntosValidos, { color: 'red', weight: 5, opacity: 0.7 }).addTo(map);
+                        map.fitBounds(rutaPolyline.getBounds());
+                        mensajeEl.textContent = `Ruta cargada con ${puntosValidos.length} puntos válidos.`;
+
+                        // Añadir marcadores de inicio y fin
+                        if (puntosValidos.length >= 1) {
+                            marcadorInicio = L.marker(puntosValidos[0]).addTo(map).bindPopup('Inicio de Ruta').openPopup();
+                        }
+                        if (puntosValidos.length >= 2) {
+                           marcadorFin = L.marker(puntosValidos[puntosValidos.length - 1]).addTo(map).bindPopup('Fin de Ruta');
+                        }
+                    } else {
+                         mensajeEl.textContent = "Los datos recibidos no contienen puntos de ruta válidos.";
+                    }
+                } else {
+                    mensajeEl.textContent = "No se encontraron puntos de ruta para este usuario y criterios.";
+                }
+            } else {
+                mensajeEl.textContent = "Error al obtener datos: " + (respuestaJson.message || "Respuesta desconocida del script.");
+            }
+        } catch (error) {
+            console.error("Error al cargar la ruta:", error);
+            mensajeEl.textContent = "Error al cargar ruta: " + error.message;
+        }
+    }
+
+    // Opcional: Cargar ruta al iniciar si el usuario ya está predefinido y es útil
+    // window.onload = function() {
+    //     if (document.getElementById('usuario').value) {
+    //         cargarRuta();
+    //     }
+    // };
+</script>
+
+</body>
+</html>
